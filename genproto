@@ -1,0 +1,3 @@
+#!/bin/bash
+
+protoc -I/usr/include pubsub.proto -I$PWD --go_opt=paths=source_relative --go_out=plugins=grpc:.
