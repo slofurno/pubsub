@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,40 +19,33 @@ import (
 	"google.golang.org/grpc"
 )
 
-type Server struct {
-	mu    sync.Mutex
-	queue *Queue
+var defaultWaitTimeout = time.Second * 5
+var defaultAckDeadline = time.Second * 10
+
+type PubSub struct {
+	mu            sync.Mutex
+	subscriptions map[string]*Queue
+	topics        map[string][]string
 
 	*pb.UnimplementedSubscriberServer
 	*pb.UnimplementedPublisherServer
 }
 
-var defaultWaitTimeout = time.Second * 5
-var defaultAckDeadline = time.Second * 10
+func (s *PubSub) String() string {
+	buf := &bytes.Buffer{}
 
-type PubSub struct {
-	mu     sync.Mutex
-	topics map[string]*Queue
-}
-
-func NewPubSub() *PubSub {
-	return &PubSub{
-		topics: map[string]*Queue{},
-	}
-}
-
-func (p *PubSub) GetTopic(name string) *Queue {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	topic, ok := p.topics[name]
-	if !ok {
-		queue := NewQueue()
-		p.topics[name] = queue
-		topic = queue
+	for topic, subs := range s.topics {
+		for _, sub := range subs {
+			fmt.Fprintf(buf, "%s -> %s\n", topic, sub)
+		}
 	}
 
-	return topic
+	return buf.String()
+}
+
+func lastName(s string) string {
+	i := strings.LastIndex(s, "/")
+	return s[i+1:]
 }
 
 type Queue struct {
@@ -207,8 +202,15 @@ func (q *Queue) setDeadline(id string, deadline time.Time) {
 	n.deadline = deadline
 }
 
-func (s *Server) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
-	fmt.Println("Pull")
+func (s *PubSub) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
+	sub := lastName(req.Subscription)
+	fmt.Printf("Pull: %s\n", sub)
+
+	queue, ok := s.subscriptions[sub]
+	if !ok {
+		return nil, fmt.Errorf("unknown subscription: %s", sub)
+	}
+
 	count := int32(5)
 	if req.MaxMessages < count {
 		count = req.MaxMessages
@@ -219,7 +221,7 @@ func (s *Server) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullRespons
 
 	var msgs []*pb.ReceivedMessage
 	for i := int32(0); i < count; i++ {
-		msg, ok := s.queue.Take(ctx)
+		msg, ok := queue.Take(ctx)
 		if !ok {
 			break
 		}
@@ -239,41 +241,74 @@ func (s *Server) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullRespons
 		ReceivedMessages: msgs,
 	}, nil
 }
-func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
-	fmt.Println("Publish")
+func (s *PubSub) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
+	topic := lastName(req.GetTopic())
+	fmt.Printf("Publish: %s\n", topic)
+
 	var ids []string
 	for _, msg := range req.GetMessages() {
 		id := uuid.New().String()
 		ids = append(ids, id)
-		s.queue.Push(id, msg.Data)
+
+		for _, sub := range s.topics[topic] {
+			s.subscriptions[sub].Push(id, msg.Data)
+		}
 	}
 
 	return &pb.PublishResponse{MessageIds: ids}, nil
 }
 
-func (s *Server) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*empty.Empty, error) {
-	fmt.Println("Acknowledge", req)
+func (s *PubSub) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*empty.Empty, error) {
+	sub := lastName(req.Subscription)
+	fmt.Printf("Acknowledge: %s\n", sub)
+
+	queue, ok := s.subscriptions[sub]
+	if !ok {
+		return nil, fmt.Errorf("unknown subscription: %s", sub)
+	}
+
 	for _, id := range req.GetAckIds() {
-		s.queue.remove(id)
+		queue.remove(id)
 	}
 
 	return &empty.Empty{}, nil
 }
 
-func (s *Server) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlineRequest) (*empty.Empty, error) {
-	fmt.Println("ModifyAckDeadline")
+func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlineRequest) (*empty.Empty, error) {
 	seconds := req.GetAckDeadlineSeconds()
 	deadline := time.Now().Add(time.Second * time.Duration(seconds))
+	sub := lastName(req.Subscription)
+	fmt.Printf("ModifyAckDeadline: %s\n", sub)
+
+	queue, ok := s.subscriptions[sub]
+	if !ok {
+		return nil, fmt.Errorf("unknown subscription: %s", sub)
+	}
+
 	for _, id := range req.GetAckIds() {
-		s.queue.setDeadline(id, deadline)
+		queue.setDeadline(id, deadline)
 	}
 
 	return &empty.Empty{}, nil
 }
 
-func (s *Server) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
+func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 	done := make(chan struct{})
-	fmt.Println("StreamingPull")
+	req, err := srv.Recv()
+	if err != nil {
+		return err
+	}
+
+	if len(req.AckIds) != 0 || len(req.ModifyDeadlineAckIds) != 0 {
+		log.Fatalf("unexpected: %#v\n", req)
+	}
+
+	sub := lastName(req.Subscription)
+	fmt.Printf("StreamingPull: %s\n", sub)
+	queue, ok := s.subscriptions[sub]
+	if !ok {
+		return fmt.Errorf("unknown subscription: %s", sub)
+	}
 
 	go func() {
 		for {
@@ -289,7 +324,7 @@ func (s *Server) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 			defer cancel()
 
 			for i := 0; i < 5; i++ {
-				msg := s.queue.take()
+				msg := queue.take()
 				if msg == nil {
 					break
 				}
@@ -306,7 +341,7 @@ func (s *Server) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 			}
 
 			if len(msgs) == 0 {
-				msg, ok := s.queue.Take(ctx)
+				msg, ok := queue.Take(ctx)
 				if !ok {
 					break
 				}
@@ -339,28 +374,65 @@ func (s *Server) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 		}
 
 		for _, id := range req.GetAckIds() {
-			s.queue.remove(id)
+			queue.remove(id)
 		}
 
 		for i, id := range req.GetModifyDeadlineAckIds() {
 			seconds := req.ModifyDeadlineSeconds[i]
 			deadline := time.Now().Add(time.Second * time.Duration(seconds))
-			s.queue.setDeadline(id, deadline)
+			queue.setDeadline(id, deadline)
 		}
 	}
 }
 
+func New(args []string) *PubSub {
+	topics := map[string][]string{}
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-sub", "--sub":
+			parts := strings.Split(args[i+1], ":")
+			if len(parts) != 2 {
+				log.Fatalf("expected format topic:subscriber, got: %s\n", args[i+1])
+			}
+			topics[parts[0]] = append(topics[parts[0]], parts[1])
+			i++
+		default:
+			log.Fatalf("unknown arg: %s\n", args[i])
+		}
+	}
+
+	subscriptions := map[string]*Queue{}
+
+	for _, sub := range topics {
+		for _, s := range sub {
+			if _, ok := subscriptions[s]; ok {
+				log.Fatalf("invalid config, duplicate subscriber: %s\n", s)
+			}
+
+			subscriptions[s] = NewQueue()
+		}
+	}
+
+	return &PubSub{
+		subscriptions: subscriptions,
+		topics:        topics,
+	}
+}
+
 func main() {
-	lis, err := net.Listen("tcp", "127.0.0.1:4004")
+	args := os.Args[1:]
+
+	lis, err := net.Listen("tcp", ":4004")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
 	fmt.Println(lis.Addr())
 	s := grpc.NewServer()
-	svr := &Server{
-		queue: NewQueue(),
-	}
+
+	svr := New(args)
+	fmt.Printf("%s\n", svr)
 
 	pb.RegisterSubscriberServer(s, svr)
 	pb.RegisterPublisherServer(s, svr)
