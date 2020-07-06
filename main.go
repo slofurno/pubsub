@@ -385,10 +385,11 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 	}
 }
 
-func New(args []string) *PubSub {
+func New(args []string) (*PubSub, string) {
 	topics := map[string][]string{}
+	address := "127.0.0.1:4004"
 
-	for i := 0; i < len(args); i++ {
+	for i := 0; i < len(args); i += 2 {
 		switch args[i] {
 		case "-sub", "--sub":
 			parts := strings.Split(args[i+1], ":")
@@ -396,7 +397,8 @@ func New(args []string) *PubSub {
 				log.Fatalf("expected format topic:subscriber, got: %s\n", args[i+1])
 			}
 			topics[parts[0]] = append(topics[parts[0]], parts[1])
-			i++
+		case "-address", "--address":
+			address = args[i+1]
 		default:
 			log.Fatalf("unknown arg: %s\n", args[i])
 		}
@@ -414,28 +416,29 @@ func New(args []string) *PubSub {
 		}
 	}
 
-	return &PubSub{
+	svc := &PubSub{
 		subscriptions: subscriptions,
 		topics:        topics,
 	}
+
+	return svc, address
 }
 
 func main() {
 	args := os.Args[1:]
 
-	lis, err := net.Listen("tcp", ":4004")
+	svc, address := New(args)
+	fmt.Printf("listening on: %s\n%s\n", address, svc)
+
+	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	fmt.Println(lis.Addr())
 	s := grpc.NewServer()
 
-	svr := New(args)
-	fmt.Printf("%s\n", svr)
-
-	pb.RegisterSubscriberServer(s, svr)
-	pb.RegisterPublisherServer(s, svr)
+	pb.RegisterSubscriberServer(s, svc)
+	pb.RegisterPublisherServer(s, svc)
 
 	if err := s.Serve(lis); err != nil {
 		fmt.Printf("failed to serve: %v", err)
