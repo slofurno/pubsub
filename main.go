@@ -292,55 +292,17 @@ func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlin
 	return &empty.Empty{}, nil
 }
 
-func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
-	done := make(chan struct{})
-	req, err := srv.Recv()
-	if err != nil {
-		return err
-	}
-
-	if len(req.AckIds) != 0 || len(req.ModifyDeadlineAckIds) != 0 {
-		log.Fatalf("unexpected: %#v\n", req)
-	}
-
-	sub := lastName(req.Subscription)
-	fmt.Printf("StreamingPull: %s\n", sub)
-	queue, ok := s.subscriptions[sub]
-	if !ok {
-		return fmt.Errorf("unknown subscription: %s", sub)
-	}
-
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-srv.Context().Done():
-			default:
-			}
+func (s *PubSub) streamingSend(srv pb.Subscriber_StreamingPullServer, queue *Queue) error {
+	for {
+		err := func() error {
 
 			var msgs []*pb.ReceivedMessage
 			ctx, cancel := context.WithTimeout(srv.Context(), defaultWaitTimeout)
 			defer cancel()
 
-			for i := 0; i < 5; i++ {
-				msg := queue.take()
-				if msg == nil {
-					break
-				}
+			i := 0
 
-				ts, _ := ptypes.TimestampProto(msg.received)
-				msgs = append(msgs, &pb.ReceivedMessage{
-					AckId: msg.id,
-					Message: &pb.PubsubMessage{
-						Data:        msg.payload,
-						MessageId:   msg.id,
-						PublishTime: ts,
-					},
-				})
-			}
-
-			if len(msgs) == 0 {
+			for ; i < 5; i++ {
 				msg, ok := queue.Take(ctx)
 				if !ok {
 					break
@@ -357,19 +319,21 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 				})
 			}
 
-			err := srv.Send(&pb.StreamingPullResponse{
+			return srv.Send(&pb.StreamingPullResponse{
 				ReceivedMessages: msgs,
 			})
-			if err != nil {
-				fmt.Println(err)
-			}
+		}()
+		if err != nil {
+			fmt.Println("send err", err)
+			return err
 		}
-	}()
+	}
+}
 
+func (s *PubSub) streamingRecv(srv pb.Subscriber_StreamingPullServer, queue *Queue) error {
 	for {
 		req, err := srv.Recv()
 		if err != nil {
-			close(done)
 			return err
 		}
 
@@ -383,6 +347,27 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 			queue.setDeadline(id, deadline)
 		}
 	}
+}
+
+func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
+	req, err := srv.Recv()
+	if err != nil {
+		return err
+	}
+
+	if len(req.AckIds) != 0 || len(req.ModifyDeadlineAckIds) != 0 {
+		log.Fatalf("unexpected: %#v\n", req)
+	}
+
+	sub := lastName(req.Subscription)
+	fmt.Printf("StreamingPull: %s\n", sub)
+	queue, ok := s.subscriptions[sub]
+	if !ok {
+		return fmt.Errorf("unknown subscription: %s", sub)
+	}
+
+	go s.streamingSend(srv, queue)
+	return s.streamingRecv(srv, queue)
 }
 
 func New(args []string) (*PubSub, string) {

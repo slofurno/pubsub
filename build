@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -e
+
 GOOS=linux CGO_ENABLED=0 CFLAGS=0 go build
 
-docker build -t slofurno/pubsub .
+docker build -t slofurno/pubsub -t slofurno/pubsub:0.3.5 .
+
+docker push slofurno/pubsub:latest
+docker push slofurno/pubsub:0.3.5
