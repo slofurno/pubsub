@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/slofurno/pubsub/emulator/pubsubpb"
+	pb "google.golang.org/genproto/googleapis/pubsub/v1"
 
 	"github.com/golang/protobuf/ptypes"
 	empty "github.com/golang/protobuf/ptypes/empty"
