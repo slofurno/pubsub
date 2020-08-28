@@ -8,9 +8,6 @@ import (
 	"strings"
 
 	"github.com/slofurno/pubsub/emulator"
-
-	pb "github.com/slofurno/pubsub/pb"
-	"google.golang.org/grpc"
 )
 
 func parseArgs(args []string) (*emulator.Config, string) {
@@ -42,7 +39,7 @@ func main() {
 	args := os.Args[1:]
 
 	cfg, address := parseArgs(args)
-	svc := emulator.New(cfg)
+	svc := emulator.NewServer(cfg)
 	fmt.Printf("listening on: %s\n%s\n", address, svc)
 
 	lis, err := net.Listen("tcp", address)
@@ -50,12 +47,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
-
-	pb.RegisterSubscriberServer(s, svc)
-	pb.RegisterPublisherServer(s, svc)
-
-	if err := s.Serve(lis); err != nil {
+	if err := svc.Serve(lis); err != nil {
 		fmt.Printf("failed to serve: %v", err)
 	}
 }

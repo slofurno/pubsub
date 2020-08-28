@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/slofurno/pubsub/pb"
+	pb "github.com/slofurno/pubsub/emulator/pb"
 
 	"github.com/golang/protobuf/ptypes"
 	empty "github.com/golang/protobuf/ptypes/empty"
@@ -396,7 +396,8 @@ func New(cfg *Config) *PubSub {
 	}
 }
 
-func NewServer(svc *PubSub) *grpc.Server {
+func NewServer(cfg *Config) *grpc.Server {
+	svc := New(cfg)
 	s := grpc.NewServer()
 	pb.RegisterSubscriberServer(s, svc)
 	pb.RegisterPublisherServer(s, svc)
