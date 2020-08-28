@@ -14,6 +14,7 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	empty "github.com/golang/protobuf/ptypes/empty"
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 )
 
 var defaultWaitTimeout = time.Second * 5
@@ -393,4 +394,12 @@ func New(cfg *Config) *PubSub {
 		subscriptions: subscriptions,
 		topics:        topics,
 	}
+}
+
+func NewServer(svc *PubSub) *grpc.Server {
+	s := grpc.NewServer()
+	pb.RegisterSubscriberServer(s, svc)
+	pb.RegisterPublisherServer(s, svc)
+
+	return s
 }
