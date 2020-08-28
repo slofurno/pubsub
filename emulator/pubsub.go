@@ -300,7 +300,7 @@ func (s *PubSub) streamingSend(srv pb.Subscriber_StreamingPullServer, queue *Que
 
 			i := 0
 
-			for ; i < 5; i++ {
+			for ; i < 1; i++ {
 				msg, ok := queue.Take(ctx)
 				if !ok {
 					break
