@@ -1,4 +1,4 @@
-package main
+package emulator
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/slofurno/pubsub/emulator"
 )
 
 func TestQueue(t *testing.T) {

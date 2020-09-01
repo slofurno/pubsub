@@ -69,6 +69,7 @@ type message struct {
 	lent     bool
 	received time.Time
 	deadline time.Time
+	attempts int
 
 	payload []byte
 	id      string
@@ -81,6 +82,7 @@ func (n *message) ready() bool {
 func (m *message) take() *message {
 	m.lent = true
 	m.deadline = time.Now().Add(defaultAckDeadline)
+	m.attempts++
 	return m
 }
 
@@ -115,7 +117,11 @@ func (q *Queue) take() *message {
 
 	for cur := q.head; cur != nil; cur = cur.next {
 		if cur.ready() {
-			return cur.take()
+			if cur.attempts <= 3 {
+				return cur.take()
+			}
+
+			q.remove(cur.id)
 		}
 	}
 
