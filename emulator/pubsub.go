@@ -19,14 +19,25 @@ import (
 
 var defaultWaitTimeout = time.Second * 5
 var defaultAckDeadline = time.Second * 10
+var defaultNumAttempts = 4
 
 type PubSub struct {
 	mu            sync.Mutex
 	subscriptions map[string]*Queue
 	topics        map[string][]string
 
+	maxNumAttempts int
+	waitTimeout    time.Duration
+
 	*pb.UnimplementedSubscriberServer
 	*pb.UnimplementedPublisherServer
+}
+
+func (s *PubSub) getSubscription(name string) (*Queue, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.subscriptions[name]
+	return sub, ok
 }
 
 func (s *PubSub) String() string {
@@ -54,12 +65,16 @@ type Queue struct {
 
 	byid    map[string]*message
 	waiting chan *message
+
+	maxNumAttempts int
 }
 
-func NewQueue() *Queue {
+func NewQueue(maxNumAttempts int) *Queue {
 	return &Queue{
 		byid:    map[string]*message{},
 		waiting: make(chan *message),
+
+		maxNumAttempts: maxNumAttempts,
 	}
 }
 
@@ -117,7 +132,7 @@ func (q *Queue) take() *message {
 
 	for cur := q.head; cur != nil; cur = cur.next {
 		if cur.ready() {
-			if cur.attempts <= 3 {
+			if cur.attempts < q.maxNumAttempts {
 				return cur.take()
 			}
 
@@ -205,7 +220,7 @@ func (q *Queue) setDeadline(id string, deadline time.Time) {
 
 	msg.deadline = deadline
 	// msg was nacked, could remove it here
-	if msg.ready() && msg.attempts <= 3 {
+	if msg.ready() && msg.attempts < q.maxNumAttempts {
 		select {
 		case q.waiting <- msg:
 			msg.take()
@@ -218,7 +233,7 @@ func (s *PubSub) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullRespons
 	sub := lastName(req.Subscription)
 	fmt.Printf("Pull: %s\n", sub)
 
-	queue, ok := s.subscriptions[sub]
+	queue, ok := s.getSubscription(sub)
 	if !ok {
 		return nil, fmt.Errorf("unknown subscription: %s", sub)
 	}
@@ -263,7 +278,11 @@ func (s *PubSub) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.Publi
 		ids = append(ids, id)
 
 		for _, sub := range s.topics[topic] {
-			s.subscriptions[sub].Push(id, msg.Data)
+			queue, ok := s.getSubscription(sub)
+			if !ok {
+				return nil, fmt.Errorf("unknown subscription: %s", sub)
+			}
+			queue.Push(id, msg.Data)
 		}
 	}
 
@@ -274,7 +293,7 @@ func (s *PubSub) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*
 	sub := lastName(req.Subscription)
 	fmt.Printf("Acknowledge: %s\n", sub)
 
-	queue, ok := s.subscriptions[sub]
+	queue, ok := s.getSubscription(sub)
 	if !ok {
 		return nil, fmt.Errorf("unknown subscription: %s", sub)
 	}
@@ -291,7 +310,7 @@ func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlin
 	deadline := time.Now().Add(time.Second * time.Duration(seconds))
 	sub := lastName(req.Subscription)
 
-	queue, ok := s.subscriptions[sub]
+	queue, ok := s.getSubscription(sub)
 	if !ok {
 		return nil, fmt.Errorf("unknown subscription: %s", sub)
 	}
@@ -376,13 +395,34 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 
 	sub := lastName(req.Subscription)
 	fmt.Printf("StreamingPull: %s\n", sub)
-	queue, ok := s.subscriptions[sub]
+	queue, ok := s.getSubscription(sub)
 	if !ok {
 		return fmt.Errorf("unknown subscription: %s", sub)
 	}
 
 	go s.streamingSend(srv, queue)
 	return s.streamingRecv(srv, queue)
+}
+
+func (s *PubSub) CreateSubscription(ctx context.Context, sub *pb.Subscription) (*pb.Subscription, error) {
+	topic := lastName(sub.Topic)
+	name := lastName(sub.Name)
+	fmt.Printf("CreateSubscription: %s -> %s\n", topic, name)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.topics[topic] = append(s.topics[topic], name)
+	s.subscriptions[name] = NewQueue(s.maxNumAttempts)
+
+	return sub, nil
+	//return nil, status.Errorf(codes.Unimplemented, "method CreateSubscription not implemented")
+}
+
+func (s *PubSub) CreateTopic(ctx context.Context, topic *pb.Topic) (*pb.Topic, error) {
+	name := lastName(topic.Name)
+	fmt.Printf("CreateTopic: %s\n", name)
+	return topic, nil
 }
 
 type TopicSubscription struct {
@@ -392,12 +432,19 @@ type TopicSubscription struct {
 
 type Config struct {
 	TopicsSubscriptions []TopicSubscription
-	Debug               bool
+
+	MaxNumAttempts int
+	Debug          bool
 }
 
 func New(cfg *Config) *PubSub {
 	topics := map[string][]string{}
 	subscriptions := map[string]*Queue{}
+
+	maxNumAttempts := cfg.MaxNumAttempts
+	if maxNumAttempts == 0 {
+		maxNumAttempts = defaultNumAttempts
+	}
 
 	for _, ts := range cfg.TopicsSubscriptions {
 		topics[ts.Topic] = append(topics[ts.Topic], ts.Subscription)
@@ -405,12 +452,14 @@ func New(cfg *Config) *PubSub {
 			log.Fatalf("invalid config, duplicate subscriber: %s\n", ts.Subscription)
 		}
 
-		subscriptions[ts.Subscription] = NewQueue()
+		subscriptions[ts.Subscription] = NewQueue(maxNumAttempts)
 	}
 
 	return &PubSub{
 		subscriptions: subscriptions,
 		topics:        topics,
+
+		maxNumAttempts: maxNumAttempts,
 	}
 }
 
