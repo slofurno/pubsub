@@ -198,12 +198,20 @@ func (q *Queue) setDeadline(id string, deadline time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	n, ok := q.byid[id]
+	msg, ok := q.byid[id]
 	if !ok {
 		return
 	}
 
-	n.deadline = deadline
+	msg.deadline = deadline
+	// msg was nacked, could remove it here
+	if msg.ready() && msg.attempts <= 3 {
+		select {
+		case q.waiting <- msg:
+			msg.take()
+		default:
+		}
+	}
 }
 
 func (s *PubSub) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
@@ -282,17 +290,19 @@ func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlin
 	seconds := req.GetAckDeadlineSeconds()
 	deadline := time.Now().Add(time.Second * time.Duration(seconds))
 	sub := lastName(req.Subscription)
-	fmt.Printf("ModifyAckDeadline: %s\n", sub)
 
 	queue, ok := s.subscriptions[sub]
 	if !ok {
 		return nil, fmt.Errorf("unknown subscription: %s", sub)
 	}
 
+	acked := []string{}
 	for _, id := range req.GetAckIds() {
+		acked = append(acked, id)
 		queue.setDeadline(id, deadline)
 	}
 
+	fmt.Printf("ModifyAckDeadline: %s (%v) = %d\n", sub, acked, seconds)
 	return &empty.Empty{}, nil
 }
 
