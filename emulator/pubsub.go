@@ -28,9 +28,16 @@ type PubSub struct {
 
 	maxNumAttempts int
 	waitTimeout    time.Duration
+	verbose        bool
 
 	*pb.UnimplementedSubscriberServer
 	*pb.UnimplementedPublisherServer
+}
+
+func (s *PubSub) printf(format string, a ...interface{}) {
+	if s.verbose {
+		fmt.Printf(format, a...)
+	}
 }
 
 func (s *PubSub) getSubscription(name string) (*Queue, bool) {
@@ -231,7 +238,7 @@ func (q *Queue) setDeadline(id string, deadline time.Time) {
 
 func (s *PubSub) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
 	sub := lastName(req.Subscription)
-	fmt.Printf("Pull: %s\n", sub)
+	s.printf("Pull: %s\n", sub)
 
 	queue, ok := s.getSubscription(sub)
 	if !ok {
@@ -270,7 +277,7 @@ func (s *PubSub) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullRespons
 }
 func (s *PubSub) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
 	topic := lastName(req.GetTopic())
-	fmt.Printf("Publish: %s\n", topic)
+	s.printf("Publish: %s\n", topic)
 
 	var ids []string
 	for _, msg := range req.GetMessages() {
@@ -291,7 +298,7 @@ func (s *PubSub) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.Publi
 
 func (s *PubSub) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*empty.Empty, error) {
 	sub := lastName(req.Subscription)
-	fmt.Printf("Acknowledge: %s\n", sub)
+	s.printf("Acknowledge: %s\n", sub)
 
 	queue, ok := s.getSubscription(sub)
 	if !ok {
@@ -321,7 +328,7 @@ func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlin
 		queue.setDeadline(id, deadline)
 	}
 
-	fmt.Printf("ModifyAckDeadline: %s (%v) = %d\n", sub, acked, seconds)
+	s.printf("ModifyAckDeadline: %s (%v) = %d\n", sub, acked, seconds)
 	return &empty.Empty{}, nil
 }
 
@@ -358,7 +365,6 @@ func (s *PubSub) streamingSend(srv pb.Subscriber_StreamingPullServer, queue *Que
 			})
 		}()
 		if err != nil {
-			fmt.Println("send err", err)
 			return err
 		}
 	}
@@ -394,7 +400,7 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 	}
 
 	sub := lastName(req.Subscription)
-	fmt.Printf("StreamingPull: %s\n", sub)
+	s.printf("StreamingPull: %s\n", sub)
 	queue, ok := s.getSubscription(sub)
 	if !ok {
 		return fmt.Errorf("unknown subscription: %s", sub)
@@ -407,7 +413,7 @@ func (s *PubSub) StreamingPull(srv pb.Subscriber_StreamingPullServer) error {
 func (s *PubSub) CreateSubscription(ctx context.Context, sub *pb.Subscription) (*pb.Subscription, error) {
 	topic := lastName(sub.Topic)
 	name := lastName(sub.Name)
-	fmt.Printf("CreateSubscription: %s -> %s\n", topic, name)
+	s.printf("CreateSubscription: %s -> %s\n", topic, name)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -421,7 +427,7 @@ func (s *PubSub) CreateSubscription(ctx context.Context, sub *pb.Subscription) (
 
 func (s *PubSub) CreateTopic(ctx context.Context, topic *pb.Topic) (*pb.Topic, error) {
 	name := lastName(topic.Name)
-	fmt.Printf("CreateTopic: %s\n", name)
+	s.printf("CreateTopic: %s\n", name)
 	return topic, nil
 }
 
@@ -434,7 +440,8 @@ type Config struct {
 	TopicsSubscriptions []TopicSubscription
 
 	MaxNumAttempts int
-	Debug          bool
+
+	Verbose bool
 }
 
 func New(cfg *Config) *PubSub {
@@ -460,6 +467,7 @@ func New(cfg *Config) *PubSub {
 		topics:        topics,
 
 		maxNumAttempts: maxNumAttempts,
+		verbose:        cfg.Verbose,
 	}
 }
 

@@ -4,7 +4,7 @@ set -e
 
 GOOS=linux CGO_ENABLED=0 CFLAGS=0 go build
 
-docker build -t slofurno/pubsub -t slofurno/pubsub:0.4.1 .
+docker build -t slofurno/pubsub -t slofurno/pubsub:0.4.5 .
 
 docker push slofurno/pubsub:latest
-docker push slofurno/pubsub:0.4.1
+docker push slofurno/pubsub:0.4.5
