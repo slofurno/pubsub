@@ -40,6 +40,8 @@ func TestQueue(t *testing.T) {
 		queue.Push(s, []byte(s))
 	}
 
+	queue.print()
+
 	for i := 0; i < 6; i++ {
 		fmt.Println(queue.take())
 		queue.print()
@@ -47,7 +49,7 @@ func TestQueue(t *testing.T) {
 }
 
 func TestBlockingPush(t *testing.T) {
-	queue := NewQueue()
+	queue := NewQueue(4)
 
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*2)

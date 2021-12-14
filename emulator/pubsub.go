@@ -120,9 +120,20 @@ func (q *Queue) print() {
 	fmt.Println(strings.Join(r, ","))
 }
 
-func (q *Queue) Take(ctx context.Context) (*message, bool) {
+func (q *Queue) quickTake(ctx context.Context) (*message, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	if ret := q.take(); ret != nil {
 		return ret, true
+	}
+
+	return nil, false
+}
+
+func (q *Queue) Take(ctx context.Context) (*message, bool) {
+	if ret, ok := q.quickTake(ctx); ok {
+		return ret, ok
 	}
 
 	select {
@@ -134,8 +145,6 @@ func (q *Queue) Take(ctx context.Context) (*message, bool) {
 }
 
 func (q *Queue) take() *message {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	for cur := q.head; cur != nil; cur = cur.next {
 		if cur.ready() {
@@ -151,9 +160,6 @@ func (q *Queue) take() *message {
 }
 
 func (q *Queue) remove(id string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	n, ok := q.byid[id]
 	if !ok {
 		return
@@ -183,6 +189,9 @@ func (q *Queue) remove(id string) {
 }
 
 func (q *Queue) Push(id string, payload []byte) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	msg := &message{
 		id:       id,
 		payload:  payload,
@@ -199,8 +208,6 @@ func (q *Queue) Push(id string, payload []byte) {
 }
 
 func (q *Queue) push(cur *message) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	q.byid[cur.id] = cur
 
@@ -215,7 +222,7 @@ func (q *Queue) push(cur *message) {
 	q.tail = cur
 }
 
-func (q *Queue) setDeadline(id string, deadline time.Time) {
+func (q *Queue) SetDeadline(id string, deadline time.Time) {
 	//TODO track multiple ack ids for each msg
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -325,7 +332,7 @@ func (s *PubSub) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlin
 	acked := []string{}
 	for _, id := range req.GetAckIds() {
 		acked = append(acked, id)
-		queue.setDeadline(id, deadline)
+		queue.SetDeadline(id, deadline)
 	}
 
 	s.printf("ModifyAckDeadline: %s (%v) = %d\n", sub, acked, seconds)
@@ -371,6 +378,7 @@ func (s *PubSub) streamingSend(srv pb.Subscriber_StreamingPullServer, queue *Que
 }
 
 func (s *PubSub) streamingRecv(srv pb.Subscriber_StreamingPullServer, queue *Queue) error {
+
 	for {
 		req, err := srv.Recv()
 		if err != nil {
@@ -384,7 +392,7 @@ func (s *PubSub) streamingRecv(srv pb.Subscriber_StreamingPullServer, queue *Que
 		for i, id := range req.GetModifyDeadlineAckIds() {
 			seconds := req.ModifyDeadlineSeconds[i]
 			deadline := time.Now().Add(time.Second * time.Duration(seconds))
-			queue.setDeadline(id, deadline)
+			queue.SetDeadline(id, deadline)
 		}
 	}
 }
@@ -467,7 +475,7 @@ func New(cfg *Config) *PubSub {
 		topics:        topics,
 
 		maxNumAttempts: maxNumAttempts,
-		verbose:        cfg.Verbose,
+		verbose:        true,
 	}
 }
 
