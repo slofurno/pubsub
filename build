@@ -4,6 +4,8 @@ set -e
 
 GOOS=linux CGO_ENABLED=0 CFLAGS=0 go build
 
+tag=$(git name-rev --tags --name-only $(git rev-list -1 HEAD .))
+
 docker build -t slofurno/pubsub -t slofurno/pubsub:0.4.5 .
 
 docker push slofurno/pubsub:latest

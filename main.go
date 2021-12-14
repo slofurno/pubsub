@@ -14,7 +14,7 @@ func parseArgs(args []string) (*emulator.Config, string) {
 	address := "127.0.0.1:4004"
 	cfg := &emulator.Config{}
 
-	for i := 0; i < len(args); i += 2 {
+	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-sub", "--sub":
 			parts := strings.Split(args[i+1], ":")
@@ -25,8 +25,12 @@ func parseArgs(args []string) (*emulator.Config, string) {
 				Topic:        parts[0],
 				Subscription: parts[1],
 			})
+			i++
 		case "-address", "--address":
 			address = args[i+1]
+			i++
+		case "-verbose", "--verbose":
+			cfg.Verbose = true
 		default:
 			log.Fatalf("unknown arg: %s\n", args[i])
 		}

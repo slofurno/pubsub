@@ -475,7 +475,7 @@ func New(cfg *Config) *PubSub {
 		topics:        topics,
 
 		maxNumAttempts: maxNumAttempts,
-		verbose:        true,
+		verbose:        cfg.Verbose,
 	}
 }
 
