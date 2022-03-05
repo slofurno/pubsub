@@ -159,6 +159,13 @@ func (q *Queue) take() *message {
 	return nil
 }
 
+func (q *Queue) Remove(id string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.remove(id)
+}
+
 func (q *Queue) remove(id string) {
 	n, ok := q.byid[id]
 	if !ok {
@@ -313,7 +320,7 @@ func (s *PubSub) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*
 	}
 
 	for _, id := range req.GetAckIds() {
-		queue.remove(id)
+		queue.Remove(id)
 	}
 
 	return &empty.Empty{}, nil
@@ -386,7 +393,7 @@ func (s *PubSub) streamingRecv(srv pb.Subscriber_StreamingPullServer, queue *Que
 		}
 
 		for _, id := range req.GetAckIds() {
-			queue.remove(id)
+			queue.Remove(id)
 		}
 
 		for i, id := range req.GetModifyDeadlineAckIds() {
